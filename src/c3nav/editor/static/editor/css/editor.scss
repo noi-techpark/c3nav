@@ -562,3 +562,88 @@ label.theme-color-label {
         display: flex;
     }
 }
+
+/* Snap-to-edges control styles */
+.leaflet-control-snap {
+    background-color: white;
+    border-radius: 4px;
+    background-clip: padding-box;
+
+   
+    /* watchout for leaflet.css trying to override a:hover with a different height/width */
+    a.snap-toggle, a.snap-to-original-toggle, a.snap-to-90-toggle {
+        background-size: 30px 30px;
+        display: block;
+        width: 30px;  
+        height: 30px;
+        background-color: white;
+        color: #666;
+        border-radius: 4px;
+       
+        &:hover {
+            background-color: #a7a7a7;
+        }
+
+        &.active {
+            background-color: #b0ecb2;
+            border: 2px solid green;
+            color: white;
+            
+            &:hover {
+                background-color: #7ac27d;
+            }
+        }
+    }
+
+    a.snap-to-90-toggle {
+        background-color: yellow !important;
+    }
+
+    /* icons */
+    a.snap-toggle {
+        background-image: url("/static/img/snap-to-edges-icon.svg");
+    }
+    a.snap-to-original-toggle {
+        background-image: url("/static/img/snap-to-original-icon.svg");
+    }
+    a.snap-to-90-toggle {
+        background-image: url("/static/img/snap-to-90-icon.svg");
+    }
+}
+
+/* Snap indicator styles */
+.snap-indicator {
+    transform: scale(11.6);
+    transform-box: fill-box;
+    transform-origin: center;
+    z-index: 1000;
+    pointer-events: none;
+}
+
+
+/* Edge highlight styles for snap-to-edges */
+.edge-highlight {
+    z-index: 999;
+    pointer-events: none;
+}
+
+.original-edge-highlight {
+    z-index: 1000;
+    pointer-events: none;
+}
+
+/* Right-angle snap indicators */
+.right-angle-reference {
+    z-index: 998;
+    pointer-events: none;
+}
+
+.right-angle-line {
+    z-index: 1001;
+    pointer-events: none;
+}
+
+.right-angle-square {
+    z-index: 1002;
+    pointer-events: none;
+}

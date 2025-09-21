@@ -183,6 +183,8 @@ editor = {
         $('#sidebar').addClass('loading').find('.content').html('');
         editor._cancel_editing();
         editor._destroy_staircase_editing();
+        editor._clear_snap_indicators();
+        editor._hide_original_geometry();
     },
     _fill_level_control: function (level_control, level_list, geometryURLs) {
         var levels = level_list.find('a');
@@ -819,6 +821,9 @@ editor = {
         });
 
         editor.map.on('zoomend', editor._adjust_line_zoom);
+
+        // initialize snap-to-edges
+        editor.init_snap_to_edges();
 
         c3nav_api.get('editor/geometrystyles')
             .then(geometrystyles => {
@@ -1457,6 +1462,10 @@ editor = {
             editor._editing_layer.disableEdit();
             editor._editing_layer = null;
         }
+
+        // clear snap indicators when canceling editing
+        editor._clear_snap_indicators();
+        editor._hide_original_geometry();
     },
     _canceled_creating: function (e) {
         // called after we canceled creating so we can remove the temporary layer.
@@ -1831,7 +1840,695 @@ editor = {
                     .then(complete_redirect)
             })
         }
-    }
+    },
+
+    // Snap-to-edges functionality
+    _snap_enabled: false,
+    _snap_to_original_enabled: false,
+    _snap_to_90_enable: false,
+    _snap_distance: 30, // pixels
+    _extension_area_multiplier: 4, // Extension area = snap_distance * this multiplier
+    _snap_to_base_map: false,
+    _snap_indicator: null,
+    _snap_candidates: [],
+
+    init_snap_to_edges: function() {
+        editor._snap_indicator = L.layerGroup().addTo(editor.map);
+
+        editor.map.on('editable:drawing:move', editor._handle_snap_during_draw);
+        editor.map.on('editable:vertex:drag', editor._handle_snap_during_vertex_drag);
+
+        editor._add_snap_controls();
+    },
+
+
+    _add_snap_controls: function() {
+
+        // add snap to edge toggle
+        var snapControl = L.control({position: 'topleft'});
+        snapControl.onAdd = function() {
+            var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-snap');
+            container.innerHTML = '<a href="#" title="Toggle Snap to Edges" class="snap-toggle ' +
+                                (editor._snap_enabled ? 'active' : '') + '"</a>';
+
+            L.DomEvent.on(container.querySelector('.snap-toggle'), 'click', function(e) {
+                e.preventDefault();
+                editor._toggle_snap();
+            });
+
+            L.DomEvent.disableClickPropagation(container);
+            return container;
+        };
+        snapControl.addTo(editor.map);
+
+        // add snap to "original edited geometry" toggle
+        var snapToOriginalControl = L.control({position: 'topleft'});
+        snapToOriginalControl.onAdd = function() {
+            var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-snap');
+            container.innerHTML = '<a href="#" title="Show Original Geometry" class="snap-to-original-toggle ' +
+                                (editor._snap_to_original_enabled ? 'active' : '') + '"></a>';
+
+            L.DomEvent.on(container.querySelector('.snap-to-original-toggle'), 'click', function(e) {
+                e.preventDefault();
+                editor._toggle_snap_to_original();
+            });
+
+            L.DomEvent.disableClickPropagation(container);
+            return container;
+        };
+        snapToOriginalControl.addTo(editor.map);
+
+        // add snap to 90° toggle
+        var snapTo90Control = L.control({position: 'topleft'});
+        snapTo90Control.onAdd = function() {
+            var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control leaflet-control-snap');
+            container.innerHTML = '<a href="#" title="[UNSTABLE] Toggle Snap to 90°" class="snap-to-90-toggle ' +
+                        (editor._snap_to_90_enabled ? 'active' : '') + '"></a>';
+
+            L.DomEvent.on(container.querySelector('.snap-to-90-toggle'), 'click', function(e) {
+                e.preventDefault();
+                editor._toggle_snap_to_90();
+            });
+
+            L.DomEvent.disableClickPropagation(container);
+            return container;
+        };
+        snapTo90Control.addTo(editor.map);
+    },
+
+
+    _toggle_snap: function() {
+        editor._snap_enabled = !editor._snap_enabled;
+        var toggle = document.querySelector('.snap-toggle');
+        if (toggle) {
+            toggle.classList.toggle('active', editor._snap_enabled);
+        }
+
+        editor._clear_snap_indicators();
+    },
+
+    _toggle_snap_to_original: function() {
+        editor._snap_to_original_enabled = !editor._snap_to_original_enabled;
+        var toggle = document.querySelector('.snap-to-original-toggle');
+        if (toggle) {
+            toggle.classList.toggle('active', editor._snap_to_original_enabled);
+        }
+
+        // Show/hide original geometry
+        if (editor._snap_to_original_enabled) {
+            editor._show_original_geometry();
+        } else {
+            editor._hide_original_geometry();
+        }
+    },
+
+    _toggle_snap_to_90: function() {
+        editor._snap_to_90_enabled = !editor._snap_to_90_enabled;
+        var toggle = document.querySelector('.snap-to-90-toggle');
+        if (toggle) {
+            toggle.classList.toggle('active', editor._snap_to_90_enabled);
+        }
+
+        editor._clear_snap_indicators();
+    },
+
+    _show_original_geometry: function() {
+        if (!editor._bounds_layer || editor._original_geometry_layer) return;
+
+        // Create a copy of the original geometry with different styling
+        var originalFeature = editor._bounds_layer.feature;
+        if (!originalFeature) return;
+
+            editor._original_geometry_layer = L.geoJSON(originalFeature, {
+            style: function() {
+                return {
+                    stroke: true,
+                    color: '#888888',
+                    weight: 2,
+                    opacity: 0.7,
+                    fill: false,
+                    dashArray: '5, 5',
+                    className: 'original-geometry'
+                };
+            },
+            pointToLayer: editor._point_to_layer
+        });
+
+        editor._original_geometry_layer.addTo(editor.map);
+    },
+
+    _hide_original_geometry: function() {
+        if (editor._original_geometry_layer) {
+            editor.map.removeLayer(editor._original_geometry_layer);
+            editor._original_geometry_layer = null;
+        }
+    },
+
+    _handle_snap_during_draw: function(e) {
+        if (!editor._snap_enabled || !editor._creating) return;
+
+        var snapped = editor._find_and_apply_snap(e.latlng);
+        if (snapped) {
+            e.latlng.lat = snapped.lat;
+            e.latlng.lng = snapped.lng;
+        }
+
+        // Apply rounding
+        e.latlng.lat = Math.round(e.latlng.lat * 100) / 100;
+        e.latlng.lng = Math.round(e.latlng.lng * 100) / 100;
+    },
+
+    _handle_snap_during_vertex_drag: function(e) {
+        if (!editor._snap_enabled) return;
+
+        var snapped = editor._find_and_apply_snap(e.latlng);
+        if (snapped) {
+            e.latlng.lat = snapped.lat;
+            e.latlng.lng = snapped.lng;
+        }
+
+        e.vertex.setLatLng([Math.round(e.latlng.lat * 100) / 100, Math.round(e.latlng.lng * 100) / 100]);
+    },
+
+    _find_and_apply_snap: function(latlng) {
+        if (!editor._geometries_layer) return null;
+
+        var mapPoint = editor.map.latLngToContainerPoint(latlng);
+        var candidates = [];
+
+        // ADD THIS: check for 90° axis snap
+        if (editor._snap_to_90_enabled) {
+            var ninetyDegreeSnap = editor._find_90_degree_snap(latlng, mapPoint);
+            if (ninetyDegreeSnap) {
+                candidates.push(ninetyDegreeSnap);
+            }
+        }
+
+        // find snap candidates from existing geometries with area-limited infinite extension
+        editor._geometries_layer.eachLayer(function(layer) {
+            if (layer === editor._bounds_layer && !editor._snap_to_original_enabled) return; //don't snap to original if not toggled.
+            if (layer === editor._editing_layer) return; // don't snap to self
+
+            // check if layer is within the area limit for infinite extension
+            var allowInfiniteExtension = editor._is_layer_in_extension_area(layer, latlng, mapPoint);
+
+            var snapPoints = editor._find_closest_point_on_geometry(layer, latlng, mapPoint, allowInfiniteExtension);
+            candidates.push(...snapPoints);
+        });
+
+        // check current editing shape with infinite extension enabled
+        if (editor._current_editing_shape) {
+            var currentShapeSnapPoints = editor._find_closest_point_on_geometry(
+                editor._current_editing_shape, latlng, mapPoint, true // Always enable infinite extension for current shape
+            );
+            candidates.push(...currentShapeSnapPoints);
+        }
+
+        // find closest candidate
+        if (candidates.length > 0) {
+            candidates.sort(function(a, b) { return a.distance - b.distance; });
+            var best = candidates[0];
+
+            // see if we can snap to a corner, i.e. an edge intersection
+            if (candidates.length >= 2 && candidates[0].isLine && candidates[1].isLine) {
+                console.log(candidates.slice(0,2))
+                var inters = editor._intersect_infinite(
+                    [candidates[0].edgeStart, candidates[0].edgeEnd],
+                    [candidates[1].edgeStart, candidates[1].edgeEnd]
+                )
+                if (inters) {
+                    intersMap = editor.map.latLngToContainerPoint(inters)
+                    var distance = Math.sqrt(
+                        Math.pow(intersMap.x - mapPoint.x, 2) +
+                        Math.pow(intersMap.y - mapPoint.y, 2)
+                    )
+                    if (distance < editor._snap_distance) {
+                        best = {
+                            latlng: inters,
+                            distance: distance,
+                            referenceVertex: inters,
+                        }
+                    }
+                }
+            }
+
+
+            // show snap indicator with edge highlighting
+            editor._show_snap_indicator(best.latlng, best);
+
+            return best.latlng;
+        } else {
+            editor._clear_snap_indicators();
+            return null;
+        }
+    },
+
+    _intersect_infinite: function(line1, line2) {
+        const [p1, p2] = line1;
+        const [p3, p4] = line2;
+
+        const x1 = p1.lng, y1 = p1.lat;
+        const x2 = p2.lng, y2 = p2.lat;
+        const x3 = p3.lng, y3 = p3.lat;
+        const x4 = p4.lng, y4 = p4.lat;
+
+        const denom = (x1-x2)*(y3-y4) - (y1-y2)*(x3-x4);
+        if (denom === 0) return null; // parallel
+
+        const px = ((x1*y2 - y1*x2)*(x3-x4) - (x1-x2)*(x3*y4 - y3*x4)) / denom;
+        const py = ((x1*y2 - y1*x2)*(y3-y4) - (y1-y2)*(x3*y4 - y3*x4)) / denom;
+
+        return {lng: px, lat: py};
+    },
+
+    _is_layer_in_extension_area: function(layer, targetLatLng, targetMapPoint) {
+        if (!layer.getLatLngs) return false;
+
+        // skip circles entirely for infinite extension
+        if (layer instanceof L.Circle || layer instanceof L.CircleMarker) {
+            return false;
+        }
+
+        try {
+            var coordinates = [];
+
+            if (layer instanceof L.Polygon || layer instanceof L.Polyline) {
+                coordinates = layer.getLatLngs();
+                if (coordinates[0] && Array.isArray(coordinates[0])) {
+                    coordinates = coordinates[0];
+                }
+            }
+
+            if (coordinates.length === 0) return false;
+
+            // extension area radius (in pixels)
+            var extensionAreaRadius = editor._snap_distance * editor._extension_area_multiplier;
+
+            // check if any vertex of the layer is within the extension area
+            for (var i = 0; i < coordinates.length; i++) {
+                var vertexMapPoint = editor.map.latLngToContainerPoint(coordinates[i]);
+                var distanceToVertex = vertexMapPoint.distanceTo(targetMapPoint);
+
+                if (distanceToVertex <= extensionAreaRadius) {
+                    return true;
+                }
+            }
+
+            for (var i = 0; i < coordinates.length; i++) {
+                var p1 = coordinates[i];
+                var p2 = coordinates[(i + 1) % coordinates.length];
+
+                if (editor._edge_intersects_circle(p1, p2, targetLatLng, targetMapPoint, extensionAreaRadius)) {
+                    return true;
+                }
+            }
+
+            return false;
+
+        } catch (error) {
+            return false;
+        }
+    },
+
+    _edge_intersects_circle: function(edgeStart, edgeEnd, circleCenter, circleCenterMap, radius) {
+        var p1Map = editor.map.latLngToContainerPoint(edgeStart);
+        var p2Map = editor.map.latLngToContainerPoint(edgeEnd);
+
+        // find closest point on edge to circle center
+        var dx = p2Map.x - p1Map.x;
+        var dy = p2Map.y - p1Map.y;
+        var length = Math.sqrt(dx * dx + dy * dy);
+
+        if (length === 0) {
+            return p1Map.distanceTo(circleCenterMap) <= radius;
+        }
+
+        var t = Math.max(0, Math.min(1,
+            ((circleCenterMap.x - p1Map.x) * dx + (circleCenterMap.y - p1Map.y) * dy) / (length * length)
+        ));
+
+        var closestPoint = {
+            x: p1Map.x + t * dx,
+            y: p1Map.y + t * dy
+        };
+
+        var distance = Math.sqrt(
+            Math.pow(closestPoint.x - circleCenterMap.x, 2) +
+            Math.pow(closestPoint.y - circleCenterMap.y, 2)
+        );
+
+        return distance <= radius;
+    },
+
+    _find_90_degree_snap: function(targetLatLng, targetMapPoint) {
+        if (!editor._geometries_layer) return null;
+
+        var bestSnap = null;
+        var closestDistance = Infinity;
+
+        // Check all geometry vertices for 90° alignment
+        editor._geometries_layer.eachLayer(function(layer) {
+            if (layer === editor._editing_layer) return; // don't snap to self
+            if (!layer.getLatLngs) return;
+
+            try {
+                var coordinates = [];
+                if (layer instanceof L.Polygon || layer instanceof L.Polyline) {
+                    coordinates = layer.getLatLngs();
+                    if (coordinates[0] && Array.isArray(coordinates[0])) {
+                        coordinates = coordinates[0];
+                    }
+                } else if (layer instanceof L.Circle || layer instanceof L.CircleMarker) {
+                    coordinates = [layer.getLatLng()];
+                }
+
+                // Check each vertex for 90° alignment
+                for (var i = 0; i < coordinates.length; i++) {
+                    var vertex = coordinates[i];
+                    var vertexMapPoint = editor.map.latLngToContainerPoint(vertex);
+
+                    // Calculate horizontal and vertical snap points
+                    var horizontalSnap = {
+                        x: targetMapPoint.x,
+                        y: vertexMapPoint.y
+                    };
+                    var verticalSnap = {
+                        x: vertexMapPoint.x,
+                        y: targetMapPoint.y
+                    };
+
+                    // Check horizontal alignment
+                    var horizontalDistance = Math.abs(targetMapPoint.y - vertexMapPoint.y);
+                    if (horizontalDistance < editor._snap_distance) {
+                        var horizontalLatLng = editor.map.containerPointToLatLng(horizontalSnap);
+                        var totalDistance = targetMapPoint.distanceTo(horizontalSnap);
+
+                        if (totalDistance < closestDistance && totalDistance < editor._snap_distance) {
+                            closestDistance = totalDistance;
+                            bestSnap = {
+                                latlng: horizontalLatLng,
+                                distance: totalDistance,
+                                snapType: 'horizontal',
+                                referenceVertex: vertex,
+                                isRightAngle: false,
+                                is90Degree: true
+                            };
+                        }
+                    }
+
+                    // Check vertical alignment
+                    var verticalDistance = Math.abs(targetMapPoint.x - vertexMapPoint.x);
+                    if (verticalDistance < editor._snap_distance) {
+                        var verticalLatLng = editor.map.containerPointToLatLng(verticalSnap);
+                        var totalDistance = targetMapPoint.distanceTo(verticalSnap);
+
+                        if (totalDistance < closestDistance && totalDistance < editor._snap_distance) {
+                            closestDistance = totalDistance;
+                            bestSnap = {
+                                latlng: verticalLatLng,
+                                distance: totalDistance,
+                                snapType: 'vertical',
+                                referenceVertex: vertex,
+                                isRightAngle: false,
+                                is90Degree: true
+                            };
+                        }
+                    }
+                }
+            } catch (error) {
+                // Skip problematic layers
+            }
+        });
+
+        return bestSnap;
+    },
+
+    _find_closest_point_on_geometry: function(layer, targetLatLng, targetMapPoint, allowInfiniteExtension) {
+        if (!layer.getLatLngs) return [];
+
+        var closestPoints = [];
+
+        try {
+            var coordinates = [];
+
+            // handle different geometry types
+            if (layer instanceof L.Polygon || layer instanceof L.Polyline) {
+                coordinates = layer.getLatLngs();
+                if (coordinates[0] && Array.isArray(coordinates[0])) {
+                    coordinates = coordinates[0]; // Handle polygon with holes
+                }
+            } else if (layer instanceof L.Circle || layer instanceof L.CircleMarker) {
+                var center = layer.getLatLng();
+                var centerMapPoint = editor.map.latLngToContainerPoint(center);
+                var distance = centerMapPoint.distanceTo(targetMapPoint);
+                if (distance < editor._snap_distance) {
+                    return [{
+                        latlng: center,
+                        distance: distance,
+                        edgeStart: center,
+                        edgeEnd: center,
+                        isInfiniteExtension: false,
+                        isRightAngle: false
+                    }];
+                }
+                return [];
+            }
+
+            // check each edge of the geometry
+            for (var i = 0; i < coordinates.length; i++) {
+
+                var p1 = coordinates[i];
+                var p2 = coordinates[(i + 1) % coordinates.length];
+
+                var snapPoint = editor._find_closest_point_on_edge(p1, p2, targetLatLng, targetMapPoint, allowInfiniteExtension);
+                if (snapPoint && snapPoint.distance < editor._snap_distance) {
+                    closestPoints.push(snapPoint);
+                }
+            }
+
+        } catch (error) {
+            return [];
+        }
+
+        return closestPoints;
+    },
+
+    _find_closest_point_on_edge: function(p1, p2, targetLatLng, targetMapPoint, allowInfiniteExtension) {
+        var p1Map = editor.map.latLngToContainerPoint(p1);
+        var p2Map = editor.map.latLngToContainerPoint(p2);
+
+        // find closest point on line (infinite or segment based on allowInfiniteExtension)
+        var dx = p2Map.x - p1Map.x;
+        var dy = p2Map.y - p1Map.y;
+        var length = Math.sqrt(dx * dx + dy * dy);
+
+        if (length === 0) {
+            // points are the same, snap to the point
+            var distance = p1Map.distanceTo(targetMapPoint);
+            return {
+                latlng: p1,
+                distance: distance,
+                edgeStart: p1,
+                edgeEnd: p2,
+                isLine: true,
+                isInfiniteExtension: false,
+                isRightAngle: false
+            };
+        }
+
+        // calculate parameter t for closest point on line
+        var t = ((targetMapPoint.x - p1Map.x) * dx + (targetMapPoint.y - p1Map.y) * dy) / (length * length);
+
+        // clamp t based on allowInfiniteExtension
+        var originalT = t;
+        if (!allowInfiniteExtension) {
+            t = Math.max(0, Math.min(1, t)); // Clamp to line segment
+        }
+
+        // calculate closest point
+        var closestMapPoint = {
+            x: p1Map.x + t * dx,
+            y: p1Map.y + t * dy
+        };
+
+        var distance = Math.sqrt(
+            Math.pow(closestMapPoint.x - targetMapPoint.x, 2) +
+            Math.pow(closestMapPoint.y - targetMapPoint.y, 2)
+        );
+
+        var closestLatLng = editor.map.containerPointToLatLng(closestMapPoint);
+
+        // determine if this is an infinite extension
+        var isInfiniteExtension = allowInfiniteExtension && (originalT < 0 || originalT > 1);
+
+        return {
+            latlng: closestLatLng,
+            distance: distance,
+            edgeStart: p1,
+            edgeEnd: p2,
+            isLine: true,
+            isInfiniteExtension: isInfiniteExtension,
+            isRightAngle: false,
+            t: originalT
+        };
+    },
+
+    _show_snap_indicator: function(latlng, snapInfo) {
+        editor._clear_snap_indicators();
+
+        var size = 0.001;
+        var bounds = [
+            [latlng.lat - size, latlng.lng - size],
+            [latlng.lat + size, latlng.lng + size]
+        ];
+        var indicator = L.rectangle(bounds, {
+            color: '#666',
+            weight: 2,
+            lineCap: "square",
+            fillOpacity: 1.,
+	          className: 'snap-indicator'
+	      });
+
+        editor._snap_indicator.addLayer(indicator);
+
+        if (snapInfo && snapInfo.is90Degree) {
+            editor._show_90_degree_highlight(snapInfo);
+        } else if (snapInfo && snapInfo.edgeStart && snapInfo.edgeEnd) {
+            editor._show_edge_highlight(snapInfo);
+        } else if (snapInfo && snapInfo.referenceVertex) {
+            editor._show_intersect_highlight(snapInfo);
+        }
+    },
+
+    _show_intersect_highlight: function(snapInfo) {
+        var referenceVertex = snapInfo.referenceVertex;
+        var snapPoint = snapInfo.latlng;
+
+        // Draw line from reference vertex to snap point
+        var guideLine = L.polyline([referenceVertex, snapPoint], {
+            color: '#00aaff',
+            weight: 2,
+            opacity: 0.8,
+            dashArray: '4, 4',
+            className: '90-degree-guide'
+        });
+        editor._snap_indicator.addLayer(guideLine);
+    },
+
+    _show_90_degree_highlight: function(snapInfo) {
+        var referenceVertex = snapInfo.referenceVertex;
+        var snapPoint = snapInfo.latlng;
+
+        // Draw line from reference vertex to snap point
+        var guideLine = L.polyline([referenceVertex, snapPoint], {
+            color: '#00aaff',
+            weight: 2,
+            opacity: 0.8,
+            dashArray: '4, 4',
+            className: '90-degree-guide'
+        });
+        editor._snap_indicator.addLayer(guideLine);
+
+        // Highlight the reference vertex
+        var vertexHighlight = L.circle(referenceVertex, {
+            radius: 0.05,
+            color: '#00aaff',
+            weight: 2,
+            opacity: 0.8,
+            fillOpacity: 0.3,
+            className: '90-degree-vertex'
+        });
+        editor._snap_indicator.addLayer(vertexHighlight);
+
+        // Add axis indicator
+        var referenceMap = editor.map.latLngToContainerPoint(referenceVertex);
+        var snapMap = editor.map.latLngToContainerPoint(snapPoint);
+
+        var axisText = snapInfo.snapType === 'horizontal' ? '─' : '│';
+        var midPoint = editor.map.containerPointToLatLng({
+            x: (referenceMap.x + snapMap.x) / 2,
+            y: (referenceMap.y + snapMap.y) / 2
+        });
+
+        // Create a small text indicator (you might need to style this with CSS)
+        var textMarker = L.marker(midPoint, {
+            icon: L.divIcon({
+                html: '<div style="color: #00aaff; font-weight: bold; font-size: 16px;">' + axisText + '</div>',
+                className: '90-degree-axis-indicator',
+                iconSize: [20, 20],
+                iconAnchor: [10, 10]
+            })
+        });
+        editor._snap_indicator.addLayer(textMarker);
+    },
+
+    _show_edge_highlight: function(snapInfo) {
+        if (!snapInfo.edgeStart || !snapInfo.edgeEnd) return;
+        var startPoint = snapInfo.edgeStart;
+        var endPoint = snapInfo.edgeEnd;
+        var extendedStart, extendedEnd;
+
+        if (snapInfo.isInfiniteExtension && snapInfo.t !== undefined) {
+            // Extend the line significantly beyond the original edge
+            var startMap = editor.map.latLngToContainerPoint(startPoint);
+            var endMap = editor.map.latLngToContainerPoint(endPoint);
+
+            var dx = endMap.x - startMap.x;
+            var dy = endMap.y - startMap.y;
+            var length = Math.sqrt(dx * dx + dy * dy);
+
+            if (length > 0) {
+                dx /= length;
+                dy /= length;
+
+                var extensionDistance = 1000;
+                var extStartMap = {
+                    x: startMap.x - dx * extensionDistance,
+                    y: startMap.y - dy * extensionDistance
+                };
+                var extEndMap = {
+                    x: endMap.x + dx * extensionDistance,
+                    y: endMap.y + dy * extensionDistance
+                };
+
+                extendedStart = editor.map.containerPointToLatLng(extStartMap);
+                extendedEnd = editor.map.containerPointToLatLng(extEndMap);
+            } else {
+                extendedStart = startPoint;
+                extendedEnd = endPoint;
+            }
+        } else {
+            extendedStart = startPoint;
+            extendedEnd = endPoint;
+        }
+
+        // create edge highlight line
+        var edgeHighlight = L.polyline([extendedStart, extendedEnd], {
+            color: snapInfo.isInfiniteExtension ? '#ffaa00' : '#66dd66', // Orange for infinite, green for original edge
+            weight: snapInfo.isInfiniteExtension ? 2 : 3,
+            opacity: snapInfo.isInfiniteExtension ? 0.4 : 0.6,
+            dashArray: snapInfo.isInfiniteExtension ? '8, 4' : null, // Dashed for infinite extension
+            className: 'edge-highlight'
+        });
+
+        editor._snap_indicator.addLayer(edgeHighlight);
+
+        // if it's an infinite extension, also show the original edge segment more prominently
+        if (snapInfo.isInfiniteExtension) {
+            var originalEdge = L.polyline([startPoint, endPoint], {
+                color: '#66dd66',
+                weight: 3,
+                opacity: 0.8,
+                className: 'original-edge-highlight'
+            });
+            editor._snap_indicator.addLayer(originalEdge);
+        }
+    },
+    _clear_snap_indicators: function() {
+        if (editor._snap_indicator) {
+            editor._snap_indicator.clearLayers();
+        }
+    },
 };
 
 function nearby_stations_available() {
