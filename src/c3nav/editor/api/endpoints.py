@@ -8,7 +8,7 @@ from c3nav.api.exceptions import API404
 from c3nav.editor.api.base import api_etag_with_update_cache_key
 from c3nav.editor.api.geometries import get_level_geometries_result, get_space_geometries_result
 from c3nav.editor.api.schemas import EditorGeometriesElemSchema, EditorID, GeometryStylesSchema, UpdateCacheKey, \
-    EditorBeaconsLookup
+    EditorBeaconsLookup, CloneFloorRequestSchema, CloneFloorResponseSchema
 from c3nav.editor.views.base import editor_etag_func, accesses_mapdata
 from c3nav.mapdata.api.base import api_etag
 from c3nav.mapdata.models import Source
@@ -146,3 +146,27 @@ def beacons_lookup(request):
         wifi_beacons=wifi_beacons,
         ibeacons=ibeacons,
     ).model_dump(mode="json")
+
+
+@editor_api_router.post('/clone-floor/', summary="clone floor items",
+                        description="clone selected map items from one floor to another",
+                        response={200: CloneFloorResponseSchema, **API404.dict(),
+                                  **auth_permission_responses},
+                        openapi_extra={"security": [{"APIKeyAuth": ["editor_access", "write"]}]})
+def clone_floor(request, data: CloneFloorRequestSchema):
+    from c3nav.editor.utils import clone_level_items
+    
+    try:
+        result = clone_level_items(
+            request=request,
+            source_level_id=data.source_level_id,
+            target_level_id=data.target_level_id,
+            items=data.items,
+        )
+        return result
+    except Exception as e:
+        return CloneFloorResponseSchema(
+            success=False,
+            cloned_items=[],
+            message=f"Error cloning items: {str(e)}"
+        ).model_dump(mode="json")

@@ -16,6 +16,9 @@
         {% trans 'Level' as model_title %}
         <i class="glyphicon glyphicon-pencil"></i> {% blocktrans %}Edit {{ model_title }}{% endblocktrans %}
     </a>
+    <button id="clone-floor-btn" class="btn btn-info btn-xs" style="margin-left: 5px;" title="Clone selected items to another floor">
+        <i class="glyphicon glyphicon-copy"></i> Clone to Floor
+    </button>
 </p>
 <p>
     {% if level.on_top_of == None %}
@@ -24,6 +27,40 @@
         <a href="{% url 'editor.levels.detail' pk=level.on_top_of.pk %}">&laquo; {% trans 'back to parent level' %}</a>
     {% endif %}
 </p>
+
+<!-- Clone Floor Interface -->
+<div id="clone-floor-selector" style="display: none; margin: 10px 0; padding: 10px; border: 1px solid #ddd; border-radius: 4px; background-color: #f9f9f9;">
+    <h4><i class="glyphicon glyphicon-copy"></i> Clone selected items</h4>
+    <div class="form-group">
+        <label for="target-level-select">Target Level:</label>
+        <select id="target-level-select" class="form-control">
+            <option value="">Select target level...</option>
+            {% for l in levels %}
+                {% if l.pk != level.pk %}
+                    <option value="{{ l.pk }}">{{ l.title }}</option>
+                {% endif %}
+            {% endfor %}
+        </select>
+    </div>
+    <div class="form-group">
+        <button id="execute-clone-btn" class="btn btn-primary btn-sm">
+            <i class="glyphicon glyphicon-ok"></i> Clone items
+        </button>
+        <button id="select-all-btn" class="btn btn-success btn-sm" style="margin-left: 5px;">
+            <i class="glyphicon glyphicon-check"></i> Select all
+        </button>
+        <button id="clear-selection-btn" class="btn btn-warning btn-sm" style="margin-left: 5px;">
+            <i class="glyphicon glyphicon-unchecked"></i> Clear selection
+        </button>
+        <button id="cancel-clone-btn" class="btn btn-default btn-sm" style="margin-left: 5px;">
+            <i class="glyphicon glyphicon-remove"></i> Cancel
+        </button>
+    </div>
+    <div id="selected-items-info" class="alert alert-info" style="margin-bottom: 0;">
+        <strong>Selected Items: <span id="selected-count">0</span></strong>
+        <p style="margin: 5px 0 0 0; font-size: 12px;">Click on map items to select them for cloning. Selected items will be highlighted in red.</p>
+    </div>
+</div>
 
 {% url 'editor.levels.graph' level=level.pk as graph_url %}
 {% url 'editor.levels.overlays' level=level.pk as overlays_url %}

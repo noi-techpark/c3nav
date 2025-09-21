@@ -939,6 +939,12 @@ editor = {
                 editor._geometries_layer.addTo(editor.map);
                 editor._highlight_layer.addTo(editor.map);
                 editor._loading_geometry = false;
+                
+                // Initialize clone floor functionality now that geometries are loaded
+                if (editor.cloneFloor && editor.cloneFloor.init) {
+                    editor.cloneFloor.init();
+                }
+                
                 if (editor._bounds_layer === null && editor._geometries_layer.getLayers().length) editor._bounds_layer = editor._geometries_layer;
                 if (editor._next_zoom && editor._bounds_layer !== null) {
                     editor.map.flyToBounds((editor._bounds_layer.getBounds !== undefined) ? editor._bounds_layer.getBounds() : [editor._bounds_layer.getLatLng(), editor._bounds_layer.getLatLng()], {
@@ -2109,6 +2115,352 @@ OverlayControl = L.Control.extend({
         localStorage.setItem('c3nav.editor.overlays.pinned', JSON.stringify(this._pinned));
     },
 });
+
+// Clone Floor Functionality
+editor.cloneFloor = {
+    selectedItems: [],
+    isSelectionMode: false,
+    
+    init: function() {
+        // This will be called after geometries are loaded
+        // Check if clone floor elements exist in the template
+        if ($('#clone-floor-btn').length > 0) {
+            // Unbind any existing handlers first
+            $('#clone-floor-btn').off('click');
+            $('#execute-clone-btn').off('click');
+            $('#cancel-clone-btn').off('click');
+            $('#select-all-btn').off('click');
+            $('#clear-selection-btn').off('click');
+            
+            // Bind click event to the button that's already in the template
+            $('#clone-floor-btn').click(editor.cloneFloor.toggleSelectionMode);
+            
+            // Bind events to the selector elements that are already in the template
+            $('#execute-clone-btn').click(editor.cloneFloor.executeClone);
+            $('#cancel-clone-btn').click(editor.cloneFloor.cancelSelection);
+            $('#select-all-btn').click(editor.cloneFloor.selectAllItems);
+            $('#clear-selection-btn').click(editor.cloneFloor.clearSelection);
+            
+            console.log('Clone floor functionality initialized');
+        } else {
+            console.log('Clone floor button not found in template');
+        }
+    },
+    
+    toggleSelectionMode: function() {
+        if (editor.cloneFloor.isSelectionMode) {
+            editor.cloneFloor.cancelSelection();
+        } else {
+            editor.cloneFloor.startSelection();
+        }
+    },
+    
+    startSelection: function() {
+        editor.cloneFloor.isSelectionMode = true;
+        editor.cloneFloor.selectedItems = [];
+        
+        console.log('Clone floor: Starting selection mode');
+        
+        $('#clone-floor-btn').html('<i class="glyphicon glyphicon-remove"></i> Cancel Selection').removeClass('btn-info').addClass('btn-warning');
+        $('#clone-floor-selector').show();
+        editor.cloneFloor.updateSelectedCount();
+        
+        // Define supported item types that can be cloned
+        var supportedTypes = ['area', 'obstacle', 'lineobstacle', 'stair', 'ramp', 'hole', 'column', 'poi', 'altitudemarker', 'space', 'building', 'door'];
+        
+        // Add click handlers directly to geometry layers
+        if (editor._geometries_layer) {
+            var layerCount = 0;
+            var supportedCount = 0;
+            editor._geometries_layer.eachLayer(function(layer) {
+                if (layer.feature && layer.feature.properties) {
+                    layerCount++;
+                    var itemType = layer.feature.properties.type;
+                    
+                    // Only make supported types selectable
+                    if (supportedTypes.indexOf(itemType.toLowerCase()) >= 0) {
+                        // Add click handler for selection
+                        layer.on('click', editor.cloneFloor.onItemClick);
+                        
+                        // Make layer visually selectable
+                        var currentStyle = layer.options || {};
+                        layer.setStyle(Object.assign({}, currentStyle, {
+                            cursor: 'pointer',
+                            opacity: Math.max(currentStyle.opacity || 0, 0.5)
+                        }));
+                        supportedCount++;
+                    }
+                }
+            });
+            console.log('Clone floor: Made', supportedCount, 'out of', layerCount, 'geometries selectable (supported types only)');
+        } else {
+            console.log('Clone floor: No geometries layer found');
+        }
+        
+        // Disable map editing
+        editor.map.doubleClickZoom.disable();
+    },
+    
+    cancelSelection: function() {
+        editor.cloneFloor.isSelectionMode = false;
+        editor.cloneFloor.selectedItems = [];
+        
+        $('#clone-floor-btn').html('<i class="glyphicon glyphicon-copy"></i> Clone to Floor').removeClass('btn-warning').addClass('btn-info');
+        $('#clone-floor-selector').hide();
+        
+        // Remove click handlers and reset styles for all geometry layers
+        if (editor._geometries_layer) {
+            editor._geometries_layer.eachLayer(function(layer) {
+                if (layer.feature && layer.feature.properties) {
+                    // Remove click handler
+                    layer.off('click', editor.cloneFloor.onItemClick);
+                    
+                    // Reset to original style
+                    layer.setStyle(editor._get_geometry_style(layer.feature));
+                }
+            });
+        }
+        
+        // Re-enable map editing
+        editor.map.doubleClickZoom.enable();
+    },
+    
+    onItemClick: function(e) {
+        if (!editor.cloneFloor.isSelectionMode) return;
+        
+        // Prevent default behavior and stop propagation
+        if (e.originalEvent) {
+            e.originalEvent.stopPropagation();
+            e.originalEvent.preventDefault();
+        }
+        L.DomEvent.stopPropagation(e);
+        L.DomEvent.preventDefault(e);
+        
+        var layer = e.target;
+        var feature = layer.feature;
+        
+        console.log('Clone floor: Item clicked', feature);
+        
+        if (!feature || !feature.properties) {
+            console.log('Clone floor: No feature or properties found');
+            return false;
+        }
+        
+        var itemId = feature.properties.id;
+        var itemType = feature.properties.type;
+        
+        console.log('Clone floor: Item ID:', itemId, 'Type:', itemType);
+        console.log('Clone floor: Full feature properties:', JSON.stringify(feature.properties, null, 2));
+        
+        // Define supported item types that can be cloned
+        var supportedTypes = ['area', 'obstacle', 'lineobstacle', 'stair', 'ramp', 'hole', 'column', 'poi', 'altitudemarker', 'space', 'building', 'door'];
+        
+        if (supportedTypes.indexOf(itemType.toLowerCase()) === -1) {
+            console.log('Clone floor: Item type "' + itemType + '" is not supported for cloning. Supported types:', supportedTypes);
+            return false;
+        }
+        
+        // Check if item is already selected
+        var existingIndex = editor.cloneFloor.selectedItems.findIndex(
+            function(item) { return item.item_id === itemId && item.item_type === itemType; }
+        );
+        
+        if (existingIndex >= 0) {
+            // Deselect item
+            editor.cloneFloor.selectedItems.splice(existingIndex, 1);
+            console.log('Clone floor: Item deselected');
+        } else {
+            // Select item
+            editor.cloneFloor.selectedItems.push({
+                item_id: itemId,
+                item_type: itemType
+            });
+            console.log('Clone floor: Item selected');
+        }
+        
+        editor.cloneFloor.updateSelectedCount();
+        editor.cloneFloor.updateVisualSelection();
+        
+        return false; // Prevent further event propagation
+    },
+    
+    updateSelectedCount: function() {
+        $('#selected-count').text(editor.cloneFloor.selectedItems.length);
+    },
+    
+    selectAllItems: function() {
+        if (!editor.cloneFloor.isSelectionMode) {
+            console.log('Clone floor: Select all called but not in selection mode');
+            return;
+        }
+        
+        // Clear current selection
+        editor.cloneFloor.selectedItems = [];
+        
+        // Define supported item types that can be cloned
+        var supportedTypes = ['area', 'obstacle', 'lineobstacle', 'stair', 'ramp', 'hole', 'column', 'poi', 'altitudemarker', 'space', 'building', 'door'];
+        
+        if (editor._geometries_layer) {
+            var selectedCount = 0;
+            editor._geometries_layer.eachLayer(function(layer) {
+                if (layer.feature && layer.feature.properties) {
+                    var itemType = layer.feature.properties.type;
+                    var itemId = layer.feature.properties.id;
+                    
+                    // Only select supported types
+                    if (supportedTypes.indexOf(itemType.toLowerCase()) >= 0) {
+                        editor.cloneFloor.selectedItems.push({
+                            item_id: itemId,
+                            item_type: itemType
+                        });
+                        selectedCount++;
+                    }
+                }
+            });
+            console.log('Clone floor: Selected all', selectedCount, 'supported items');
+        }
+        
+        editor.cloneFloor.updateSelectedCount();
+        editor.cloneFloor.updateVisualSelection();
+    },
+    
+    clearSelection: function() {
+        if (!editor.cloneFloor.isSelectionMode) {
+            console.log('Clone floor: Clear selection called but not in selection mode');
+            return;
+        }
+        
+        // Clear current selection
+        editor.cloneFloor.selectedItems = [];
+        console.log('Clone floor: Cleared all selected items');
+        
+        editor.cloneFloor.updateSelectedCount();
+        editor.cloneFloor.updateVisualSelection();
+    },
+    
+    updateVisualSelection: function() {
+        if (!editor._geometries_layer) return;
+        
+        // Reset all styles first
+        editor._geometries_layer.eachLayer(function(layer) {
+            if (layer.feature && layer.feature.properties) {
+                layer.setStyle(editor._get_geometry_style(layer.feature));
+            }
+        });
+        
+        // Highlight selected items
+        editor._geometries_layer.eachLayer(function(layer) {
+            if (layer.feature && layer.feature.properties) {
+                var isSelected = false;
+                for (var i = 0; i < editor.cloneFloor.selectedItems.length; i++) {
+                    var item = editor.cloneFloor.selectedItems[i];
+                    if (item.item_id === layer.feature.properties.id && 
+                        item.item_type === layer.feature.properties.type) {
+                        isSelected = true;
+                        break;
+                    }
+                }
+                
+                if (isSelected) {
+                    layer.setStyle({
+                        stroke: true,
+                        color: '#ff0000',
+                        weight: 4,
+                        opacity: 1,
+                        fillOpacity: 0.7,
+                        fillColor: '#ff0000'
+                    });
+                }
+            }
+        });
+    },
+    
+    
+    executeClone: function() {
+        var targetLevelId = $('#target-level-select').val();
+        
+        if (!targetLevelId) {
+            alert('Please select a target level');
+            return;
+        }
+        
+        if (editor.cloneFloor.selectedItems.length === 0) {
+            alert('Please select items to clone');
+            return;
+        }
+        
+        // Get current level ID
+        var currentLevelId = editor._level_control.current_level_id;
+        
+        if (currentLevelId === parseInt(targetLevelId)) {
+            alert('Source and target levels cannot be the same');
+            return;
+        }
+        
+        // Show loading state
+        $('#execute-clone-btn').prop('disabled', true).html('<i class="glyphicon glyphicon-refresh"></i> Cloning...');
+        
+        // Prepare request data
+        var requestData = {
+            source_level_id: currentLevelId,
+            target_level_id: parseInt(targetLevelId),
+            items: editor.cloneFloor.selectedItems,
+        };
+        
+        // Debug: Log detailed request data
+        console.log('Clone floor: Making API call with data:', requestData);
+        console.log('Clone floor: Selected items details:', JSON.stringify(editor.cloneFloor.selectedItems, null, 2));
+        console.log('Clone floor: Source level ID:', currentLevelId);
+        console.log('Clone floor: Target level ID:', parseInt(targetLevelId));
+        
+        // Use the raw fetch API with better error handling
+        c3nav_api.authenticated().then(function() {
+            return fetch(c3nav_api.make_url('editor/clone-floor/'), {
+                method: 'POST',
+                credentials: 'include',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-API-Key': c3nav_api.key,
+                    'Accept': 'application/json'
+                },
+                body: JSON.stringify(requestData)
+            });
+        })
+        .then(function(response) {
+            console.log('Clone floor: API response status:', response.status);
+            
+            if (!response.ok) {
+                // Log the actual response text for debugging
+                return response.text().then(function(text) {
+                    console.error('Clone floor: API error response:', text);
+                    throw new Error('HTTP ' + response.status + ': ' + response.statusText);
+                });
+            }
+            
+            return response.json();
+        })
+        .then(function(data) {
+            console.log('Clone floor: API response data:', data);
+            console.log('Clone floor: API response type:', typeof data);
+            console.log('Clone floor: API response keys:', Object.keys(data));
+            
+            if (data.success) {
+                var clonedCount = data.cloned_items ? data.cloned_items.length : 0;
+                alert('Successfully cloned ' + clonedCount + ' items: ' + data.message);
+                editor.cloneFloor.cancelSelection();
+            } else {
+                alert('Clone failed: ' + data.message);
+            }
+        })
+        .catch(function(error) {
+            console.error('Clone floor: Error details:', error);
+            alert('Clone failed: ' + error.message);
+        })
+        .finally(function() {
+            $('#execute-clone-btn').prop('disabled', false).html('<i class="glyphicon glyphicon-ok"></i> Clone Items');
+        });
+    }
+};
 
 if ($('#sidebar').length) {
     editor.init();

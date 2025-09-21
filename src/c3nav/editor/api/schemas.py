@@ -125,3 +125,26 @@ class EditorBeaconsLookup(BaseSchema):
             ]
         ]
     ]
+
+
+class CloneItemSchema(BaseSchema):
+    item_type: Annotated[str, APIField(title="geometry type (e.g., 'area', 'obstacle', 'space')")]
+    item_id: EditorID
+
+
+class CloneFloorRequestSchema(BaseSchema):
+    source_level_id: EditorID
+    target_level_id: EditorID
+    items: list[CloneItemSchema]
+
+
+class ClonedItemResult(BaseSchema):
+    item_type: str
+    original_id: EditorID
+    cloned_id: EditorID
+
+
+class CloneFloorResponseSchema(BaseSchema):
+    success: bool
+    cloned_items: list[ClonedItemResult]
+    message: str
