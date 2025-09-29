@@ -6,15 +6,7 @@ on:
 
 jobs:
   docker:
-    strategy:
-      matrix:
-        include:
-          - arch: amd64
-            runner: ubuntu-24.04
-          - arch: arm64
-            runner: ubuntu-24.04-arm
-
-    runs-on: ${{matrix.runner}}
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -36,10 +28,9 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          platforms: ${{ matrix.arch }}
           build-args: "COMMIT=${{ github.sha }}"
           tags: |
-            ghcr.io/noi-techpark/c3nav:${{ github.sha }}
+            ghcr.io/noi-techpark/c3nav:${{github.sha}}
             ghcr.io/noi-techpark/c3nav:${{github.ref_name}}-latest
           labels: |
             org.opencontainers.image.version=${{ github.sha }}
@@ -57,10 +48,9 @@ jobs:
           context: .
           file: docker/tileserver.dockerfile
           push: true
-          platforms: ${{ matrix.arch }}
           build-args: "COMMIT=${{ github.sha }}"
           tags: |
-            ghcr.io/noi-techpark/c3nav-tileserver:${{ github.sha }}
+            ghcr.io/noi-techpark/c3nav-tileserver:${{github.sha}}
             ghcr.io/noi-techpark/c3nav-tileserver:${{github.ref_name}}-latest
           labels: |
             org.opencontainers.image.version=${{ github.sha }}
