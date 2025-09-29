@@ -17,7 +17,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt_$TARGETARCH --mount=type=tmp
     apt-get update && apt-get install -y --no-install-recommends \
     python3.12=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python3.12
-    libpython3.12-stdlib=3.12.3-1ubuntu0.8 \
+    libpython3.12-dev=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python3.12
     python3.12-venv=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python-pip
