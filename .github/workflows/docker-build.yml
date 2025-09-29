@@ -9,10 +9,11 @@ jobs:
     strategy:
       matrix:
         include:
-          - arch: linux/amd64
+          - arch: amd64
             runner: ubuntu-24.04
-          - arch: linux/arm64
+          - arch: arm64
             runner: ubuntu-24.04-arm
+
     runs-on: ${{matrix.runner}}
     steps:
       - name: Checkout
@@ -35,7 +36,7 @@ jobs:
           context: .
           file: docker/Dockerfile
           push: true
-          platforms: ${{matrix.arch}}
+          platforms: ${{ matrix.arch }}
           build-args: "COMMIT=${{ github.sha }}"
           tags: |
             ghcr.io/noi-techpark/c3nav:${{ github.sha }}
@@ -56,7 +57,7 @@ jobs:
           context: .
           file: docker/tileserver.dockerfile
           push: true
-          platforms: "linux/amd64"
+          platforms: ${{ matrix.arch }}
           build-args: "COMMIT=${{ github.sha }}"
           tags: |
             ghcr.io/noi-techpark/c3nav-tileserver:${{ github.sha }}
