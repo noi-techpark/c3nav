@@ -39,6 +39,7 @@ jobs:
           build-args: "COMMIT=${{ github.sha }}"
           tags: |
             ghcr.io/noi-techpark/c3nav:${{ github.sha }}
+            ghcr.io/noi-techpark/c3nav:${{github.ref_name}}-latest
           labels: |
             org.opencontainers.image.version=${{ github.sha }}
           annotations: |
@@ -58,7 +59,8 @@ jobs:
           platforms: "linux/amd64"
           build-args: "COMMIT=${{ github.sha }}"
           tags: |
-            ghcr.io/noi-techpark/c3nav:${{ github.sha }}
+            ghcr.io/noi-techpark/c3nav-tileserver:${{ github.sha }}
+            ghcr.io/noi-techpark/c3nav-tileserver:${{github.ref_name}}-latest
           labels: |
             org.opencontainers.image.version=${{ github.sha }}
           annotations: |
