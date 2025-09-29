@@ -27,6 +27,7 @@ jobs:
           file: docker/Dockerfile
           push: true
           build-args: "COMMIT=${{ github.sha }}"
+          platforms: linux/amd64
           tags: |
             ghcr.io/noi-techpark/c3nav:${{github.sha}}
             ghcr.io/noi-techpark/c3nav:${{github.ref_name}}-latest
@@ -47,6 +48,7 @@ jobs:
           file: docker/tileserver.dockerfile
           push: true
           build-args: "COMMIT=${{ github.sha }}"
+          platforms: linux/amd64
           tags: |
             ghcr.io/noi-techpark/c3nav-tileserver:${{github.sha}}
             ghcr.io/noi-techpark/c3nav-tileserver:${{github.ref_name}}-latest
