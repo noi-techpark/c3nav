@@ -17,15 +17,15 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt_$TARGETARCH --mount=type=tmp
     apt-get update && apt-get install -y --no-install-recommends \
     python3.12=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python3.12
-    libpython3.12=3.12.3-1ubuntu0.8 \
+    libpython3.12-stdlib=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python3.12
     python3.12-venv=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python-pip
-    python3-pip=24.0+dfsg-1ubuntu1.2 \
+    python3-pip=24.0+dfsg-1ubuntu1.3 \
     # renovate: srcname=postgresql-16
-    libpq5=16.9-0ubuntu0.24.04.1 \
+    libpq5=16.10-0ubuntu0.24.04.1 \
     # renovate: srcname=postgresql-16
-    postgresql-client-16=16.9-0ubuntu0.24.04.1 \
+    postgresql-client-16=16.10-0ubuntu0.24.04.1 \
     curl=8.5.0-2ubuntu10.6 \
     # renovate: srcname=pcre3
     libpcre3=2:8.39-15build1 \
@@ -54,7 +54,7 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt_$TARGETARCH --mount=type=tmp
     python3.12-dev=3.12.3-1ubuntu0.8 \
     libpcre3-dev=2:8.39-15build1 \
     # renovate: srcname=postgresql-16
-    libpq-dev=16.9-0ubuntu0.24.04.1 \
+    libpq-dev=16.10-0ubuntu0.24.04.1 \
     # renovate: srcname=cairo
     libcairo2-dev=1.18.0-3build1 \
     libgirepository1.0-dev=1.80.1-1 \

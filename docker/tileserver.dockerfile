@@ -17,11 +17,11 @@ RUN --mount=type=cache,target=/var/cache/apt,id=apt_$TARGETARCH --mount=type=tmp
     apt-get update && apt-get install -y --no-install-recommends \
     python3.12=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python3.12
-    libpython3.12=3.12.3-1ubuntu0.8 \
+    libpython3.12-stdlib=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python3.12
     python3.12-venv=3.12.3-1ubuntu0.8 \
     # renovate: srcname=python-pip
-    python3-pip=24.0+dfsg-1ubuntu1.2 \
+    python3-pip=24.0+dfsg-1ubuntu1.3 \
     curl=8.5.0-2ubuntu10.6 \
     # renovate: srcname=pcre3
     libpcre3=2:8.39-15build1 \
