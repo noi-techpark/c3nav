@@ -61,4 +61,3 @@ jobs:
             org.opencontainers.image.description="Indoor navigation for the Chaos Communication Congress and other events. - Tileserver"
           cache-from: type=registry,ref=ghcr.io/noi-techpark/c3nav_cache:tileserver_main
           cache-to: type=registry,ref=ghcr.io/noi-techpark/c3nav_cache:tileserver_main,mode=max
-          
